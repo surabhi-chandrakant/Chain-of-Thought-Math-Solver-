@@ -17,13 +17,7 @@ Try it live: [https://your-app-name.streamlit.app](https://cot-math-solver.strea
 - [Quick Start](#quick-start)
 - [Installation](#installation)
 - [Usage](#usage)
-- [Examples](#examples)
-- [Deployment](#deployment)
-- [API Reference](#api-reference)
-- [Project Structure](#project-structure)
-- [Contributing](#contributing)
-- [License](#license)
-- [Acknowledgments](#acknowledgments)
+
 
 ## 🚀 Features
 
@@ -76,9 +70,35 @@ Result: 36.4
 git clone https://github.com/surabhi-chandrakant/Chain-of-Thought-Math-Solver-.git
 cd math-solver
 
+
 pip install -r requirements.txt
 
 streamlit run app.py
+```
 
+### Usage
+
+from math_solver import ChainOfThoughtMathSolver
+
+# Initialize solver
+solver = ChainOfThoughtMathSolver()
+
+# Solve a problem
+solution = solver.solve("What is 25% of 200?")
+
+# Print solution
+solver.print_solution(solution)
+
+
+### Web Interface
+Launch the Streamlit app
+
+Type your math problem in the text box
+
+Click "Solve Problem" or press Enter
+
+View the detailed chain-of-thought reasoning
+
+See the final answer with all calculation steps
 
 
