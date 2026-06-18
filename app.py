@@ -12,6 +12,7 @@ def sanitize_input(text: str) -> Tuple[bool, str, str]:
     if len(text) > 1500:
         return False, "", "Input too long (max 1500 characters)"
     dangerous = [
+        r'<[a-zA-Z]',          # FIX-4: block any HTML/XML tag (catches <h1>, <div>, etc.)
         r'<script', r'javascript:', r'SELECT\s+.*\s+FROM',
         r'DROP\s+TABLE', r'DELETE\s+FROM', r'INSERT\s+INTO',
         r'UPDATE\s+.*\s+SET', r'UNION\s+SELECT', r'exec\s*\(',
@@ -59,20 +60,18 @@ def _get_sympy():
 
 def try_system_of_equations(pl: str) -> Optional[Dict]:
     """Solve systems like: x^2 + y^2 = 25 and x - y = 1"""
-    # Look for 'and' or newline or semicolon separating two equations
     separators = [r'\band\b', r';', r'\n', r',\s*(?=\S+=)']
     equations_raw = None
     for sep in separators:
         parts = re.split(sep, pl, flags=re.IGNORECASE)
         parts = [p.strip() for p in parts if '=' in p.strip()]
         if len(parts) >= 2:
-            equations_raw = parts[:3]  # max 3 equations
+            equations_raw = parts[:3]
             break
 
     if not equations_raw or len(equations_raw) < 2:
         return None
 
-    # Detect variables present
     all_text = ' '.join(equations_raw)
     vars_found = []
     for v in ['x', 'y', 'z']:
@@ -104,9 +103,7 @@ def try_system_of_equations(pl: str) -> Optional[Dict]:
         if not solutions:
             return None
 
-        steps = [
-            f"<b>System of {len(eqs_sympy)} equations:</b>",
-        ]
+        steps = [f"<b>System of {len(eqs_sympy)} equations:</b>"]
         for i, eq_d in enumerate(eq_displays, 1):
             steps.append(f"<b>Equation {i}:</b> {eq_d}")
 
@@ -130,7 +127,6 @@ def try_system_of_equations(pl: str) -> Optional[Dict]:
                 sol_strs.append(f"({pair})")
                 steps.append(f"<b>Solution:</b> {pair}")
 
-        # Verify first solution
         if solutions:
             sol = solutions[0]
             steps.append("<b>Verify in each equation:</b>")
@@ -152,7 +148,7 @@ def try_system_of_equations(pl: str) -> Optional[Dict]:
             "type": "system of equations",
             "reasoning": f"System of {len(eqs_sympy)} equations with {len(vars_found)} unknown(s). Solve by substitution or elimination."
         }
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -163,7 +159,6 @@ def try_algebra(pl: str) -> Optional[Dict]:
     if not any(v in pl for v in ['x', 'y', 'z']):
         return None
 
-    # Skip if it's a system (has 'and' with multiple equations)
     if re.search(r'\band\b', pl, re.IGNORECASE):
         parts = [p for p in re.split(r'\band\b', pl, flags=re.IGNORECASE) if '=' in p]
         if len(parts) >= 2:
@@ -173,7 +168,6 @@ def try_algebra(pl: str) -> Optional[Dict]:
         symbols, Eq, solve, expand, factor, simplify, sp_sqrt, sp_pi, parse_expr, tfm = _get_sympy()
         from sympy import Symbol
 
-        # Detect which variable
         var_char = 'x'
         for v in ['x', 'y', 'z']:
             if v in pl:
@@ -282,7 +276,6 @@ def try_percentage_chain(pl: str) -> Optional[Dict]:
         return {"value": fmt(final), "steps": steps, "type": "percentage chain",
                 "reasoning": f"+{mu}% markup then -{disc}% discount. Sequential % changes multiply, they don't add."}
 
-    # Single increase
     m = re.search(
         r"(?:costs?|prices?|worth|is)\s+\D{0,3}?(\d+\.?\d*)"
         r".*?(?:increase[ds]?|raise[ds]?|goes?\s*up)\s+(?:by\s+)?(\d+\.?\d*)\s*%", pl)
@@ -293,7 +286,6 @@ def try_percentage_chain(pl: str) -> Optional[Dict]:
         return {"value": fmt(result), "steps": steps, "type": "percentage increase",
                 "reasoning": "Increase: multiply by (1 + rate/100)."}
 
-    # Single decrease
     m = re.search(
         r"(?:costs?|prices?|worth|is)\s+\D{0,3}?(\d+\.?\d*)"
         r".*?(?:decrease[ds]?|discount(?:ed)?|reduc(?:ed)?|drops?)\s+(?:by\s+)?(\d+\.?\d*)\s*%", pl)
@@ -325,9 +317,104 @@ def try_average(pl: str) -> Optional[Dict]:
     return None
 
 
+# FIX-1 & FIX-2: New dedicated summation handler
+# Handles "sum of 45, 67, and 89" and "add 10, 20, 30 together".
+# Placed before try_named_operations so it runs before division regex.
+def try_summation(pl: str) -> Optional[Dict]:
+    """
+    FIX-1: Handles natural-language summation.
+    Triggers on: 'sum of ...', 'add ... together', 'total of ...', 'find the sum of ...'.
+    Extracts numbers from the matched segment only — not the whole string —
+    to avoid absorbing stray digits from surrounding words.
+    """
+    patterns = [
+        r"(?:find\s+the\s+|calculate\s+the\s+|what\s+is\s+the\s+)?sum\s+of\s+([\d\s,\.and]+)",
+        r"add\s+([\d\s,\.and]+?)(?:\s+together)?(?:\s*$|\.)",
+        r"total\s+of\s+([\d\s,\.and]+)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, pl)
+        if m:
+            nums = extract_numbers(m.group(1))
+            if len(nums) >= 2:
+                total = sum(nums)
+                nd = [fmt(n) for n in nums]
+                steps = [
+                    f"<b>Numbers:</b> {', '.join(str(n) for n in nd)}",
+                    f"<b>Sum:</b> {' + '.join(str(n) for n in nd)} = {fmt(total)}",
+                ]
+                return {
+                    "value": fmt(total),
+                    "steps": steps,
+                    "type": "summation",
+                    "reasoning": "Sum = add all numbers together.",
+                }
+    return None
+
+
+# FIX-2: Simple word problem solver (additive/subtractive single-step)
+def try_word_problem(pl: str) -> Optional[Dict]:
+    """
+    FIX-2: Handles simple one-step word problems of the form:
+      '[person/thing] has/costs X [verb] Y more/less'
+    Covers addition ('buys N more', 'gets N more', 'gains N', 'earns N') and
+    subtraction ('gives away N', 'loses N', 'spends N', 'sells N').
+    Only triggers when the sentence structure clearly describes an add/subtract event.
+    """
+    # Addition patterns: "has X ... [buys/gets/receives/earns/adds/picks] Y more"
+    add_pattern = re.search(
+        r"has\s+(\d+\.?\d*)\s+\w+"           # "has 10 apples"
+        r".*?\b(?:buys?|gets?|receives?|earns?|adds?|picks?|finds?|collects?)\s+"
+        r"(\d+\.?\d*)\s*(?:more\b|\w+\s*more\b)?",
+        pl
+    )
+    if add_pattern:
+        a, b = float(add_pattern.group(1)), float(add_pattern.group(2))
+        result = a + b
+        steps = [
+            f"<b>Starts with:</b> {fmt(a)}",
+            f"<b>Adds:</b> {fmt(b)}",
+            f"<b>Total:</b> {fmt(a)} + {fmt(b)} = {fmt(result)}",
+        ]
+        return {
+            "value": fmt(result),
+            "steps": steps,
+            "type": "word problem (addition)",
+            "reasoning": "Start value + added value = final total.",
+        }
+
+    # Subtraction patterns: "has X ... [gives/loses/spends/sells/drops] Y"
+    sub_pattern = re.search(
+        r"has\s+(\d+\.?\d*)\s+\w+"
+        r".*?\b(?:gives?\s*away|loses?|spends?|sells?|drops?|uses?|eats?|removes?)\s+"
+        r"(\d+\.?\d*)",
+        pl
+    )
+    if sub_pattern:
+        a, b = float(sub_pattern.group(1)), float(sub_pattern.group(2))
+        result = a - b
+        steps = [
+            f"<b>Starts with:</b> {fmt(a)}",
+            f"<b>Removes:</b> {fmt(b)}",
+            f"<b>Remaining:</b> {fmt(a)} - {fmt(b)} = {fmt(result)}",
+        ]
+        return {
+            "value": fmt(result),
+            "steps": steps,
+            "type": "word problem (subtraction)",
+            "reasoning": "Start value − removed value = remaining total.",
+        }
+
+    return None
+
+
 def try_named_operations(pl: str) -> Optional[Dict]:
-    # Division
-    m = (re.search(r"(\d+\.?\d*)\s*(?:divided by|[/÷])\s*(\d+\.?\d*)", pl)
+    # FIX-3: Division regex — removed bare "/" from the character class.
+    # Previously: r"(\d+\.?\d*)\s*(?:divided by|[/÷])\s*(\d+\.?\d*)"
+    # The bare "/" caused "1/2 + 1/4" to match here and return 0.5 instead
+    # of being evaluated as a fraction expression.
+    # Fix: only match "divided by" (words) or "÷" (unambiguous symbol).
+    m = (re.search(r"(\d+\.?\d*)\s*(?:divided\s+by|÷)\s*(\d+\.?\d*)", pl)
          or re.search(r"divide\s+(\d+\.?\d*)\s+by\s+(\d+\.?\d*)", pl))
     if m:
         a, b = float(m.group(1)), float(m.group(2))
@@ -418,10 +505,9 @@ def try_named_operations(pl: str) -> Optional[Dict]:
 
 
 def try_expression_eval(pl: str) -> Dict:
-    # Skip if it looks like an equation with variables
     if re.search(r'[xyz]\s*[=+\-*/]', pl) and '=' in pl:
         return {"value": None, "steps": ["Expression contains variables and = — treating as equation"], "type": "error", "reasoning": ""}
-    
+
     expr = pl
     expr = re.sub(r"(\d+\.?\d*)\s*(?:percent|%)\s+of\s+(\d+\.?\d*)", r"(\1/100)*\2", expr)
     expr = expr.replace("plus", "+").replace("minus", "-")
@@ -454,18 +540,19 @@ def try_expression_eval(pl: str) -> Dict:
 
 def solve_local(problem: str) -> Dict[str, Any]:
     pl = re.sub(r'^["\' ]+|["\' ]+$', "", problem.strip()).strip().lower()
-    
-    # Priority order: systems first, then algebra, then other solvers
+
     solvers = [
-        try_system_of_equations,  # Systems of equations (highest priority)
-        try_algebra,              # Single equations
-        try_percentage_chain,     # Percentage chains
-        try_percentage,           # Simple percentages
-        try_average,              # Averages
-        try_named_operations,     # Named operations
-        try_expression_eval       # Expression evaluation (lowest priority)
+        try_system_of_equations,   # Systems of equations (highest priority)
+        try_algebra,               # Single variable equations
+        try_percentage_chain,      # Percentage chains
+        try_percentage,            # Simple percentages
+        try_average,               # Averages
+        try_summation,             # FIX-1: "sum of X, Y, and Z" (before named ops)
+        try_word_problem,          # FIX-2: "has X buys Y more" (before expression eval)
+        try_named_operations,      # Named operations (division regex now tighter - FIX-3)
+        try_expression_eval,       # Expression evaluation (lowest priority)
     ]
-    
+
     for fn in solvers:
         try:
             result = fn(pl)
@@ -545,7 +632,6 @@ def _call_anthropic(problem: str, api_key: str, model: str) -> Dict:
 
 
 def _call_openai_compat(problem: str, api_key: str, url: str, model: str) -> Dict:
-    """Handles Groq and OpenRouter (OpenAI-compatible)."""
     payload = {
         "model": model,
         "messages": [
@@ -755,12 +841,15 @@ with st.sidebar:
         "Arithmetic · BODMAS · Percentages · Averages · "
         "Algebra (linear, quadratic) · **Systems of equations** · "
         "Square roots · Powers · Inverse · Work rate · Simple interest · "
-        "Percentage chains"
+        "Percentage chains · **Summation** · **Simple word problems**"
     )
 
     st.markdown("---")
     st.markdown("### 💡 Try These")
     examples = [
+        "Find the sum of 45, 67, and 89",
+        "John has 10 apples and buys 5 more. How many apples does he have?",
+        "1/2 + 1/4",
         "2(3x - 5) = 4x + 8",
         "x^2 - 5x + 6 = 0",
         "Solve the system: x^2 + y^2 = 25 and x - y = 1",
@@ -773,7 +862,7 @@ with st.sidebar:
         "(5 + 3) * 2",
         "square root of 144",
         "inverse of 9",
-        "200 / 8",
+        "200 divided by 8",
     ]
     for i, ex in enumerate(examples):
         if st.button(ex, key=f"ex_{i}"):
@@ -787,7 +876,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     problem = st.text_area(
         "Enter your math problem:",
-        placeholder="e.g.  x² + y² = 25 and x - y = 1   ·   2(3x-5) = 4x+8   ·   56% of 65",
+        placeholder="e.g.  x² + y² = 25 and x - y = 1   ·   2(3x-5) = 4x+8   ·   56% of 65   ·   sum of 45, 67, 89",
         height=110,
         key="problem_text",
     )
@@ -820,11 +909,8 @@ if solve_btn:
             provider = st.session_state.get("api_provider", st.session_state.get("provider_select", "Anthropic (Claude)"))
 
             with st.spinner("Solving…"):
-                # ALWAYS try built-in solver first
                 result = solve_local(cleaned)
-                
-                # If built-in fails OR it's a system of equations that was solved, use the result
-                # Only use API if built-in fails AND API key exists
+
                 if (result["value"] is None or result["type"] == "error") and api_key:
                     with st.spinner(f"Asking {provider}…"):
                         result = solve_with_api(cleaned, api_key, provider)
