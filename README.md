@@ -1,6 +1,6 @@
 # 📚 Chain-of-Thought Math Problem Solver
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://your-app-name.streamlit.app)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://cot-math-solver.streamlit.app/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 
@@ -10,7 +10,7 @@
 
 ## ✨ Live Demo
 
-Try it live: [https://your-app-name.streamlit.app](https://your-app-name.streamlit.app)
+Try it live: [CoT Math Solver](https://cot-math-solver.streamlit.app/)
 
 ---
 
